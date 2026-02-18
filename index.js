@@ -27,6 +27,30 @@ const userData = {};
 const lastActivity = {};
 const INACTIVITY_TIMEOUT = 30 * 60 * 1000; // 30 минут
 
+// Дедуп апдейтов: иногда один и тот же message может прийти дважды
+// (например, при рестарте polling/сетевых ретраях). Дедупим по message_id.
+const processedCommandMessages = new Map(); // key -> processedAtMs
+const COMMAND_DEDUPE_TTL_MS = 60 * 1000;
+
+function wasCommandMessageProcessed(command, chatId, messageId) {
+  if (!chatId || !messageId) return false;
+  const key = `${command}:${chatId}:${messageId}`;
+  const now = Date.now();
+
+  const prev = processedCommandMessages.get(key);
+  if (prev && now - prev < COMMAND_DEDUPE_TTL_MS) return true;
+
+  processedCommandMessages.set(key, now);
+  return false;
+}
+
+setInterval(() => {
+  const now = Date.now();
+  for (const [key, ts] of processedCommandMessages.entries()) {
+    if (now - ts > COMMAND_DEDUPE_TTL_MS) processedCommandMessages.delete(key);
+  }
+}, COMMAND_DEDUPE_TTL_MS).unref?.();
+
 // Периодическая проверка активности (каждую минуту)
 setInterval(() => {
   const now = Date.now();
@@ -68,8 +92,13 @@ sheetsService.testConnection().then(success => {
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const userId = msg.from.id;
+
+  if (wasCommandMessageProcessed('start', chatId, msg.message_id)) {
+    console.log(`[START][DEDUP] Повторный апдейт проигнорирован (user=${userId}, chat=${chatId}, msg_id=${msg.message_id})`);
+    return;
+  }
   
-  console.log(`[START] Пользователь ${userId}`);
+  console.log(`[START] Пользователь ${userId} (chat=${chatId}, msg_id=${msg.message_id})`);
   
   // Обновляем активность
   lastActivity[userId] = {
