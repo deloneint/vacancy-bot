@@ -31,6 +31,8 @@ const INACTIVITY_TIMEOUT = 30 * 60 * 1000; // 30 минут
 // (например, при рестарте polling/сетевых ретраях). Дедупим по message_id.
 const processedCommandMessages = new Map(); // key -> processedAtMs
 const COMMAND_DEDUPE_TTL_MS = 60 * 1000;
+const lastCommandAtByChat = new Map(); // key -> lastAtMs
+const COMMAND_THROTTLE_WINDOW_MS = 2000;
 
 function wasCommandMessageProcessed(command, chatId, messageId) {
   if (!chatId || !messageId) return false;
@@ -50,6 +52,15 @@ setInterval(() => {
     if (now - ts > COMMAND_DEDUPE_TTL_MS) processedCommandMessages.delete(key);
   }
 }, COMMAND_DEDUPE_TTL_MS).unref?.();
+
+function isCommandThrottled(command, chatId) {
+  if (!chatId) return false;
+  const key = `${command}:${chatId}`;
+  const now = Date.now();
+  const lastAt = lastCommandAtByChat.get(key);
+  lastCommandAtByChat.set(key, now);
+  return typeof lastAt === 'number' && now - lastAt < COMMAND_THROTTLE_WINDOW_MS;
+}
 
 // Периодическая проверка активности (каждую минуту)
 setInterval(() => {
@@ -95,6 +106,11 @@ bot.onText(/\/start/, async (msg) => {
 
   if (wasCommandMessageProcessed('start', chatId, msg.message_id)) {
     console.log(`[START][DEDUP] Повторный апдейт проигнорирован (user=${userId}, chat=${chatId}, msg_id=${msg.message_id})`);
+    return;
+  }
+
+  if (isCommandThrottled('start', chatId)) {
+    console.log(`[START][THROTTLE] Слишком частый /start проигнорирован (user=${userId}, chat=${chatId}, msg_id=${msg.message_id})`);
     return;
   }
   
